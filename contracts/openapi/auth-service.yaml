@@ -1,0 +1,183 @@
+openapi: 3.1.0
+info:
+  title: getlink_dtd Auth API
+  version: 0.1.0
+servers:
+  - url: /api/v1
+paths:
+  /auth/register:
+    post:
+      operationId: register
+      tags: [Authentication]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '201':
+          description: Account created and access token issued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthTokenResponse' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /auth/login:
+    post:
+      operationId: login
+      tags: [Authentication]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Access token issued; refresh cookie is added in phase 4B
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthTokenResponse' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /auth/refresh:
+    post:
+      operationId: refreshSession
+      tags: [Authentication]
+      security: [{ refreshCookie: [] }]
+      responses:
+        '200':
+          description: Access and refresh tokens rotated; new refresh cookie set
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthTokenResponse' }
+        '401': { $ref: '#/components/responses/Problem' }
+  /auth/logout:
+    post:
+      operationId: logoutCurrentSession
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: Current session revoked }
+  /auth/logout-all:
+    post:
+      operationId: logoutAllSessions
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: All sessions revoked }
+  /auth/password/forgot:
+    post:
+      operationId: requestPasswordReset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ForgotPasswordRequest' }
+      responses:
+        '202': { description: Request accepted without account disclosure }
+  /auth/password/reset:
+    post:
+      operationId: resetPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResetPasswordRequest' }
+      responses:
+        '204': { description: Password replaced and sessions revoked }
+        '400': { $ref: '#/components/responses/Problem' }
+  /me:
+    get:
+      operationId: getCurrentAccount
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Current account }
+        '401': { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: scheduleAccountDeletion
+      security: [{ bearerAuth: [] }]
+      responses:
+        '202': { description: Account disabled and deletion scheduled }
+        '401': { $ref: '#/components/responses/Problem' }
+  /admin/users:
+    get:
+      operationId: listUsers
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Paginated user list }
+        '403': { $ref: '#/components/responses/Problem' }
+  /admin/users/{userId}/status:
+    patch:
+      operationId: updateUserStatus
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: User status updated }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+    refreshCookie:
+      type: apiKey
+      in: cookie
+      name: getlink_refresh
+  schemas:
+    RegisterRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, pattern: '^[a-z0-9-]{3,30}$' }
+        email: { type: [string, 'null'], format: email, maxLength: 254 }
+        password: { type: string, minLength: 12, maxLength: 128 }
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, minLength: 3, maxLength: 30 }
+        password: { type: string, maxLength: 128 }
+    ForgotPasswordRequest:
+      type: object
+      required: [identifier]
+      properties:
+        identifier: { type: string, maxLength: 254 }
+    ResetPasswordRequest:
+      type: object
+      required: [token, newPassword]
+      properties:
+        token: { type: string, maxLength: 128 }
+        newPassword: { type: string, minLength: 12, maxLength: 128 }
+    AuthTokenResponse:
+      type: object
+      required: [accessToken, tokenType, expiresIn, account]
+      properties:
+        accessToken: { type: string }
+        tokenType: { type: string, const: Bearer }
+        expiresIn: { type: integer, format: int64 }
+        account: { $ref: '#/components/schemas/Account' }
+    Account:
+      type: object
+      required: [id, username, status, roles]
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        email: { type: [string, 'null'], format: email }
+        status: { type: string }
+        roles:
+          type: array
+          items: { type: string }
+    Problem:
+      type: object
+      required: [title, status, code, requestId]
+      properties:
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        requestId: { type: string }
+  responses:
+    Problem:
+      description: Problem details
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }

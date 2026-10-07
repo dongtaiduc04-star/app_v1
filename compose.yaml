@@ -1,0 +1,153 @@
+name: getlink-dtd
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  mysql-init:
+    image: mysql:8.4
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
+      AUTH_DB_NAME: ${AUTH_DB_NAME:-authdb}
+      AUTH_DB_USER: ${AUTH_DB_USER:-getlink_auth}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:?Set AUTH_DB_PASSWORD in .env}
+      LINK_DB_NAME: ${LINK_DB_NAME:-linkdb}
+      LINK_DB_USER: ${LINK_DB_USER:-getlink_link}
+      LINK_DB_PASSWORD: ${LINK_DB_PASSWORD:?Set LINK_DB_PASSWORD in .env}
+    command:
+      - sh
+      - -ec
+      - |
+        mysql --host=mysql --user=root --password="$$MYSQL_ROOT_PASSWORD" <<SQL
+        CREATE DATABASE IF NOT EXISTS \`$$AUTH_DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+        CREATE DATABASE IF NOT EXISTS \`$$LINK_DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+        CREATE USER IF NOT EXISTS '$$AUTH_DB_USER'@'%' IDENTIFIED BY '$$AUTH_DB_PASSWORD';
+        ALTER USER '$$AUTH_DB_USER'@'%' IDENTIFIED BY '$$AUTH_DB_PASSWORD';
+        GRANT ALL PRIVILEGES ON \`$$AUTH_DB_NAME\`.* TO '$$AUTH_DB_USER'@'%';
+        CREATE USER IF NOT EXISTS '$$LINK_DB_USER'@'%' IDENTIFIED BY '$$LINK_DB_PASSWORD';
+        ALTER USER '$$LINK_DB_USER'@'%' IDENTIFIED BY '$$LINK_DB_PASSWORD';
+        GRANT ALL PRIVILEGES ON \`$$LINK_DB_NAME\`.* TO '$$LINK_DB_USER'@'%';
+        FLUSH PRIVILEGES;
+        SQL
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: docker/java-service.Dockerfile
+      args:
+        MODULE: auth-service
+    restart: unless-stopped
+    depends_on:
+      mysql-init:
+        condition: service_completed_successfully
+    environment:
+      SERVER_PORT: 8081
+      AUTH_DB_URL: jdbc:mysql://mysql:3306/${AUTH_DB_NAME:-authdb}
+      AUTH_DB_USER: ${AUTH_DB_USER:-getlink_auth}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:?Set AUTH_DB_PASSWORD in .env}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      JWT_ISSUER: ${JWT_ISSUER:-getlink_dtd}
+      REFRESH_COOKIE_SECURE: "false"
+      FRONTEND_BASE_URL: http://localhost:${FRONTEND_PORT:-3000}
+    ports:
+      - "${AUTH_PORT:-8081}:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -T 3 -O /dev/null http://127.0.0.1:8081/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 25s
+
+  link-service:
+    build:
+      context: .
+      dockerfile: docker/java-service.Dockerfile
+      args:
+        MODULE: link-service
+    restart: unless-stopped
+    depends_on:
+      mysql-init:
+        condition: service_completed_successfully
+    environment:
+      SERVER_PORT: 8082
+      LINK_DB_URL: jdbc:mysql://mysql:3306/${LINK_DB_NAME:-linkdb}
+      LINK_DB_USER: ${LINK_DB_USER:-getlink_link}
+      LINK_DB_PASSWORD: ${LINK_DB_PASSWORD:?Set LINK_DB_PASSWORD in .env}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      JWT_ISSUER: ${JWT_ISSUER:-getlink_dtd}
+      AVATAR_STORAGE_DIRECTORY: /app/data/avatars
+    ports:
+      - "${LINK_PORT:-8082}:8082"
+    volumes:
+      - avatar-data:/app/data/avatars
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -T 3 -O /dev/null http://127.0.0.1:8082/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 25s
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: docker/java-service.Dockerfile
+      args:
+        MODULE: api-gateway
+    restart: unless-stopped
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      link-service:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: 8080
+      AUTH_SERVICE_URL: http://auth-service:8081
+      LINK_SERVICE_URL: http://link-service:8082
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -T 3 -O /dev/null http://127.0.0.1:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    environment:
+      API_GATEWAY_URL: http://api-gateway:8080
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -T 3 -O /dev/null http://127.0.0.1:3000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+volumes:
+  mysql-data:
+  avatar-data:
