@@ -2,12 +2,15 @@
 
 A portfolio publication of the GetLink DTD link-in-bio application for Azure.
 Local Docker Compose remains available for development. This is a
-source-only copy, separate from the private repositories used to operate the
-original environment. Pushing here does not deploy that environment.
+public code copy alongside the private repositories used to operate the
+original environment. Delivery is disabled by default. After the owner
+explicitly activates it, a push to `app_v1/main` publishes to the **same**
+GetLink image packages and updates `helm_v1`; the existing Argo CD Application
+deploys whichever Helm repository the owner has selected.
 
 Companion publications:
 - [helm_v1](https://github.com/dongtaiduc04-star/helm_v1): Azure/k3s application Helm chart.
-- [infra_v1](https://github.com/dongtaiduc04-star/infra_v1): Azure infrastructure examples.
+- [infra_v1](https://github.com/dongtaiduc04-star/infra_v1): Azure infrastructure source and shared-environment operating instructions.
 
 ## Application
 
@@ -38,18 +41,26 @@ Never commit `.env`, real passwords, private keys or database exports.
 `PASSWORD_RESET_LOG_TOKEN` is only for development; never enable it for a
 production deployment. Keep secure refresh cookies enabled outside local HTTP.
 
-## Checks-only continuous integration
+## Checks and opt-in Azure delivery
 
 `.github/workflows/ci.yml` runs on pull requests and pushes to `main`:
 
 - Maven build, tests and JaCoCo coverage reports.
 - Frontend lint, 13 current unit tests with coverage thresholds, and build.
+- Production dependency audit and offline delivery-helper tests.
 
-It uses GitHub-hosted Ubuntu 24.04 runners and read-only repository permissions.
-It does not use Azure/Sonar credentials, publish images, update another
-repository or deploy anything. Checkout does not retain its authentication
-credential in the working copy. Backend integration tests use temporary
-Testcontainers databases, not a deployed database.
+Checks use GitHub-hosted Ubuntu 24.04 runners and read-only repository
+permissions. With `ENABLE_AZURE_DELIVERY` unset or not exactly `true`, there is
+no Sonar upload, image publication or Helm write. Pull requests and manual
+`workflow_dispatch` runs are always checks-only. Checkout does not retain its
+authentication credential. Backend integration tests use temporary
+Testcontainers databases, not the deployed database.
+
+The owner-authorized delivery path reuses the existing Azure/k3s environment,
+domain, MySQL data, avatars and SonarQube project `getlink-dtd`; it does not
+create a second environment. Read [Shared Azure delivery](docs/shared-azure-delivery.md)
+before enabling it. Publishing to `helm_v1` is not itself an Argo repository
+switch. The original app/Helm/infra repositories remain unchanged.
 
 Run the same checks locally:
 
@@ -61,6 +72,8 @@ npm run lint
 npm test
 npm run build
 npm audit --omit=dev
+cd ..
+node --test scripts/tests/azure-delivery.test.mjs
 ```
 
 A successful build is not a complete security audit. At the reviewed source
@@ -71,7 +84,10 @@ the repository. Recheck advisories before reusing this code.
 
 ## Publication and maintenance policy
 
-Only the repository owner is intended to have write/merge access. Public
+Only the repository owner is intended to have human write/merge access. The
+opt-in workflow also uses an owner-authorized, `helm_v1`-only token to commit
+the four image selections; outsiders do not receive that token or Git access.
+Public
 visibility allows inspection, download and forks; it does not grant write
 access to this repository. See [CONTRIBUTING.md](CONTRIBUTING.md) and
 [SECURITY.md](SECURITY.md).
