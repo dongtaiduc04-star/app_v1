@@ -1,232 +1,307 @@
-name: CI/CD - shared Azure k3s
+# The original Azure pipeline, with v1 repository targets and public-safe
+# credentials/action downloads. No AWS deployment path is included.
+
+name: CI/CD - Azure k3s
 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-concurrency:
-  group: app-azure-${{ github.ref }}
-  # Never cancel a main release between its image pushes and Helm update.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   MAVEN_OPTS: -Xmx2g
   NEXT_TELEMETRY_DISABLED: "1"
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Do not interrupt main halfway through its shared package/Helm writes.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  verify:
-    name: Backend and frontend checks
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+  build-and-quality:
+    name: Build, Test, Checkstyle & SonarQube (PRs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Set up Java 17
+
+      - name: Set up JDK 17 and Maven cache
         uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
         with:
           distribution: temurin
           java-version: "17"
-      - name: Set up Node.js 22
+          cache: maven
+
+      - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
-      - name: Backend build and tests
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Cache Sonar scanner data
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4 (v4.3.0)
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar-${{ hashFiles('**/pom.xml', 'frontend/package-lock.json') }}
+
+      - name: Build backend and run tests
         run: mvn -B -V -DskipTests=false clean verify
-      - name: Checkstyle (legacy non-blocking check)
+
+      - name: Run Checkstyle (non-blocking legacy step)
         run: mvn -B checkstyle:check || true
+
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
-      - name: Frontend lint
+
+      - name: Run frontend lint
         working-directory: frontend
         run: npm run lint
-      - name: Frontend tests
+
+      - name: Run frontend unit tests
         working-directory: frontend
         run: npm test
-      - name: Frontend build
+
+      - name: Build frontend
         working-directory: frontend
         run: npm run build
-      - name: Production dependency audit
-        working-directory: frontend
-        run: npm audit --omit=dev
-      - name: Delivery helper tests
-        run: node --test scripts/tests/azure-delivery.test.mjs
-      # No secrets, Sonar upload or package/Git write on pull requests,
-      # workflow_dispatch, forks, or before the owner explicitly opts in.
-      - name: Validate shared SonarQube configuration
+
+      # Public PRs never receive analysis credentials or publish.
+      # The existing owner already opted in with ENABLE_AZURE_DELIVERY=true.
+      - name: Validate Azure SonarQube configuration
         if: >-
           github.repository == 'dongtaiduc04-star/app_v1' &&
           github.event_name == 'push' && github.ref == 'refs/heads/main' &&
           vars.ENABLE_AZURE_DELIVERY == 'true'
+        shell: bash
         env:
-          SONAR_HOST_URL: ${{ vars.AZURE_SONAR_HOST_URL }}
           SONAR_TOKEN: ${{ secrets.AZURE_SONAR_TOKEN }}
-        run: node scripts/azure-delivery.mjs check-sonar
-      - name: Shared SonarQube scan
+          SONAR_HOST_URL: ${{ vars.AZURE_SONAR_HOST_URL }}
+          HELM_REPO_NAME: ${{ vars.HELM_REPO_NAME }}
+        run: |
+          set -euo pipefail
+          if [[ "${SONAR_HOST_URL}" != 'https://sonar-azure.dongtaiduc.me' &&
+                "${SONAR_HOST_URL}" != 'https://sonar-azure.dongtaiduc.me/' ]]; then
+            echo 'AZURE_SONAR_HOST_URL must select the existing Azure SonarQube HTTPS endpoint.' >&2
+            exit 1
+          fi
+          if [[ -z "${SONAR_TOKEN}" ]]; then
+            echo 'Repository secret AZURE_SONAR_TOKEN is required.' >&2
+            exit 1
+          fi
+          if [[ "${HELM_REPO_NAME}" != 'helm_v1' ]]; then
+            echo 'Repository variable HELM_REPO_NAME must be helm_v1, never the old helm repository.' >&2
+            exit 1
+          fi
+
+      - name: SonarQube scan (main branch only)
         if: >-
           github.repository == 'dongtaiduc04-star/app_v1' &&
           github.event_name == 'push' && github.ref == 'refs/heads/main' &&
           vars.ENABLE_AZURE_DELIVERY == 'true'
         uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8.3.0
-        with:
-          scannerVersion: 8.1.0.6389
-          skipSignatureVerification: false
         env:
           SONAR_TOKEN: ${{ secrets.AZURE_SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ vars.AZURE_SONAR_HOST_URL }}
-      - name: Shared SonarQube quality gate
+
+      - name: SonarQube quality gate check (main branch only)
         if: >-
           github.repository == 'dongtaiduc04-star/app_v1' &&
           github.event_name == 'push' && github.ref == 'refs/heads/main' &&
           vars.ENABLE_AZURE_DELIVERY == 'true'
         uses: SonarSource/sonarqube-quality-gate-action@cf038b0e0cdecfa9e56c198bbb7d21d751d62c3b # v1.2.0
-        timeout-minutes: 6
         with:
           scanMetadataReportFile: .scannerwork/report-task.txt
-          pollingTimeoutSec: 300
         env:
           SONAR_TOKEN: ${{ secrets.AZURE_SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ vars.AZURE_SONAR_HOST_URL }}
 
-  publish:
-    name: Publish the four shared GetLink images
-    needs: verify
+  docker-build-push:
+    name: Build Docker images and push to GHCR (push to main)
+    runs-on: ubuntu-latest
+    needs: build-and-quality
     if: >-
       github.repository == 'dongtaiduc04-star/app_v1' &&
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-      vars.ENABLE_AZURE_DELIVERY == 'true' && needs.verify.result == 'success'
-    runs-on: ubuntu-24.04
+      vars.ENABLE_AZURE_DELIVERY == 'true' &&
+      needs.build-and-quality.result == 'success'
     timeout-minutes: 60
     permissions:
       contents: read
       packages: write
+    outputs:
+      image_prefix: ${{ steps.set_outputs.outputs.image_prefix }}
+      image_tag: ${{ steps.set_outputs.outputs.image_tag }}
     steps:
-      - name: Checkout the verified source commit
+      - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Set up Node.js 22 for delivery guards
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
-          node-version: "22"
-      - name: Validate release identity
-        run: node scripts/azure-delivery.mjs check-release
-        env:
-          ENABLE_AZURE_DELIVERY: ${{ vars.ENABLE_AZURE_DELIVERY }}
-      - name: Build all images before any package write
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine image prefix and immutable tag
+        id: set_outputs
         shell: bash
         run: |
           set -euo pipefail
-          prefix='ghcr.io/dongtaiduc04-star/getlink-dtd'
+          OWNER="$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          IMAGE_PREFIX="ghcr.io/${OWNER}/getlink-dtd"
+          # Preserve the original full-SHA convention; the registry does not
+          # itself forbid a rerun from replacing the content of this tag.
+          IMAGE_TAG="${{ github.sha }}"
+          echo "image_prefix=${IMAGE_PREFIX}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Build all application images
+        env:
+          IMAGE_PREFIX: ${{ steps.set_outputs.outputs.image_prefix }}
+          IMAGE_TAG: ${{ steps.set_outputs.outputs.image_tag }}
+        run: |
+          set -euo pipefail
           docker build -f frontend/Dockerfile \
-            --label 'org.opencontainers.image.source=https://github.com/dongtaiduc04-star/app_v1' \
-            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
-            -t "${prefix}-frontend:${GITHUB_SHA}" -t "${prefix}-frontend:latest" .
-          for component in api-gateway auth-service link-service; do
-            docker build -f docker/java-service.Dockerfile --build-arg "MODULE=${component}" \
-              --label 'org.opencontainers.image.source=https://github.com/dongtaiduc04-star/app_v1' \
-              --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
-              -t "${prefix}-${component}:${GITHUB_SHA}" -t "${prefix}-${component}:latest" .
-          done
-      - name: Push SHA tags and the shared latest tags
-        shell: bash
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            -t "${IMAGE_PREFIX}-frontend:${IMAGE_TAG}" \
+            -t "${IMAGE_PREFIX}-frontend:latest" .
+          docker build -f docker/java-service.Dockerfile --build-arg MODULE=api-gateway \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            -t "${IMAGE_PREFIX}-api-gateway:${IMAGE_TAG}" \
+            -t "${IMAGE_PREFIX}-api-gateway:latest" .
+          docker build -f docker/java-service.Dockerfile --build-arg MODULE=auth-service \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            -t "${IMAGE_PREFIX}-auth-service:${IMAGE_TAG}" \
+            -t "${IMAGE_PREFIX}-auth-service:latest" .
+          docker build -f docker/java-service.Dockerfile --build-arg MODULE=link-service \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            -t "${IMAGE_PREFIX}-link-service:${IMAGE_TAG}" \
+            -t "${IMAGE_PREFIX}-link-service:latest" .
+
+      - name: Push all image tags to GHCR
         env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_PREFIX: ${{ steps.set_outputs.outputs.image_prefix }}
+          IMAGE_TAG: ${{ steps.set_outputs.outputs.image_tag }}
         run: |
           set -euo pipefail
-          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
-          printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io -u dongtaiduc04-star --password-stdin
-          prefix='ghcr.io/dongtaiduc04-star/getlink-dtd'
           for component in frontend api-gateway auth-service link-service; do
-            docker push "${prefix}-${component}:${GITHUB_SHA}"
-          done
-          # This intentionally replaces latest also used by the old pipeline.
-          # Argo deploys the SHA pinned in Helm, never latest.
-          for component in frontend api-gateway auth-service link-service; do
-            docker push "${prefix}-${component}:latest"
+            docker push "${IMAGE_PREFIX}-${component}:${IMAGE_TAG}"
+            docker push "${IMAGE_PREFIX}-${component}:latest"
           done
 
   update-helm:
-    name: Update only helm_v1 Azure image values
-    needs: publish
+    name: Update GetLink Helm values
+    runs-on: ubuntu-latest
+    needs: docker-build-push
     if: >-
       github.repository == 'dongtaiduc04-star/app_v1' &&
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-      vars.ENABLE_AZURE_DELIVERY == 'true' && needs.publish.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
+      vars.ENABLE_AZURE_DELIVERY == 'true' &&
+      needs.docker-build-push.result == 'success'
+    concurrency:
+      group: getlink-helm-values
+      cancel-in-progress: false
     steps:
-      - name: Checkout the reviewed updater
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ github.sha }}
-          path: source
-          persist-credentials: false
-      - name: Set up Node.js 22 for the reviewed updater
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "22"
-      - name: Validate release identity and writer credential
-        run: node source/scripts/azure-delivery.mjs check-writer
-        env:
-          ENABLE_AZURE_DELIVERY: ${{ vars.ENABLE_AZURE_DELIVERY }}
-          GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
-      - name: Checkout the fixed Helm target
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: dongtaiduc04-star/helm_v1
-          ref: main
-          path: helm-target
-          token: ${{ secrets.GITOPS_PAT }}
-          persist-credentials: false
-      - name: Update only the four image repositories and tags
-        run: node source/scripts/azure-delivery.mjs update-values helm-target "${GITHUB_SHA}"
-      - name: Commit and normally push only the reviewed values file
+      - name: Validate the v1 Helm writer target
         shell: bash
         env:
+          HELM_REPO_NAME: ${{ vars.HELM_REPO_NAME }}
           GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
         run: |
           set -euo pipefail
-          cd helm-target
-          expected_url='https://github.com/dongtaiduc04-star/helm_v1'
+          [[ "${HELM_REPO_NAME}" == 'helm_v1' ]] || { echo 'HELM_REPO_NAME must be helm_v1.' >&2; exit 1; }
+          [[ -n "${GITOPS_PAT}" ]] || { echo 'Repository secret GITOPS_PAT is required.' >&2; exit 1; }
+
+      - name: Checkout Helm repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ github.repository_owner }}/${{ vars.HELM_REPO_NAME }}
+          ref: main
+          token: ${{ secrets.GITOPS_PAT }}
+          persist-credentials: false
+
+      - name: Install yq (mikefarah/yq v4)
+        shell: bash
+        run: |
+          set -euo pipefail
+          yq_path="${RUNNER_TEMP}/yq-v4.34.1"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            https://github.com/mikefarah/yq/releases/download/v4.34.1/yq_linux_amd64 \
+            -o "${yq_path}"
+          # SHA-256 from the official v4.34.1 checksums asset, column SHA-256
+          # identified by that release's checksums_hashes_order asset.
+          printf 'c5a92a572b3bd0024c7b1fe8072be3251156874c05f017c23f9db7b3254ae71a  %s\n' "${yq_path}" | sha256sum --check --strict -
+          sudo install -m 0755 "${yq_path}" /usr/local/bin/yq
+          yq --version
+
+      - name: Update GetLink image repositories and tags
+        env:
+          IMAGE_PREFIX: ${{ needs.docker-build-push.outputs.image_prefix }}
+          TAG: ${{ needs.docker-build-push.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          [[ "${IMAGE_PREFIX}" == 'ghcr.io/dongtaiduc04-star/getlink-dtd' ]]
+          [[ "${TAG}" =~ ^[0-9a-f]{40}$ ]]
+          [[ -f helm/getlink-dtd/values-azure.yaml && ! -L helm/getlink-dtd/values-azure.yaml ]]
+          export FRONTEND_IMAGE="${IMAGE_PREFIX}-frontend"
+          export API_GATEWAY_IMAGE="${IMAGE_PREFIX}-api-gateway"
+          export AUTH_SERVICE_IMAGE="${IMAGE_PREFIX}-auth-service"
+          export LINK_SERVICE_IMAGE="${IMAGE_PREFIX}-link-service"
+          yq eval '
+            .images.frontend.repository = strenv(FRONTEND_IMAGE) |
+            .images.frontend.tag = strenv(TAG) |
+            .images.apiGateway.repository = strenv(API_GATEWAY_IMAGE) |
+            .images.apiGateway.tag = strenv(TAG) |
+            .images.authService.repository = strenv(AUTH_SERVICE_IMAGE) |
+            .images.authService.tag = strenv(TAG) |
+            .images.linkService.repository = strenv(LINK_SERVICE_IMAGE) |
+            .images.linkService.tag = strenv(TAG)
+          ' -i helm/getlink-dtd/values-azure.yaml
+
+      - name: Commit and push Helm values
+        shell: bash
+        env:
+          TAG: ${{ needs.docker-build-push.outputs.image_tag }}
+          GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
+        run: |
+          set -euo pipefail
           actual_url="$(git remote get-url origin)"
-          [[ "${actual_url}" == "${expected_url}" || "${actual_url}" == "${expected_url}.git" ]]
+          [[ "${actual_url}" == 'https://github.com/dongtaiduc04-star/helm_v1' ||
+             "${actual_url}" == 'https://github.com/dongtaiduc04-star/helm_v1.git' ]]
           [[ "$(git branch --show-current)" == main ]]
-          [[ -z "$(git diff --name-only --diff-filter=ACDMRTUXB -- . ':!helm/getlink-dtd/values-azure.yaml')" ]]
+          [[ -z "$(git diff --name-only -- . ':!helm/getlink-dtd/values-azure.yaml')" ]]
           [[ -z "$(git ls-files --others --exclude-standard)" ]]
           git diff --check
           if git diff --quiet -- helm/getlink-dtd/values-azure.yaml; then
-            echo 'The selected image SHA is already recorded; no Git write.'
+            echo 'No changes to commit'
             exit 0
           fi
-          git -c user.name='github-actions[bot]' \
-            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-            -c commit.gpgsign=false \
-            add -- helm/getlink-dtd/values-azure.yaml
+          git config user.name "${GIT_AUTHOR_NAME}"
+          git config user.email "${GIT_AUTHOR_EMAIL}"
+          git add -- helm/getlink-dtd/values-azure.yaml
           [[ "$(git diff --cached --name-only)" == helm/getlink-dtd/values-azure.yaml ]]
-          git -c user.name='github-actions[bot]' \
-            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-            -c commit.gpgsign=false \
-            commit -m "chore: update Azure images from app_v1 to ${GITHUB_SHA}"
-          # Credentials exist only for this command, not in the Git config/URL.
+          git -c commit.gpgsign=false commit -m "chore: update Azure images to ${TAG}"
+          # Checkout never persists the token; provide it only for this push.
           auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GITOPS_PAT}" | base64 -w0)"
           echo "::add-mask::${auth_header}"
           GIT_CONFIG_COUNT=1 \
           GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
           GIT_CONFIG_VALUE_0="${auth_header}" \
-          git -c remote.origin.mirror=false -c push.followTags=false \
-            push --no-follow-tags --recurse-submodules=no origin HEAD:refs/heads/main
-          # A concurrent owner update rejects this normal push. Never force,
-          # reset, auto-rebase or silently overwrite an owner's Helm change.
+            git -c remote.origin.mirror=false -c push.followTags=false \
+              push --no-follow-tags --recurse-submodules=no origin HEAD:refs/heads/main
+          # Concurrent Helm changes reject the normal push; never force/rebase.

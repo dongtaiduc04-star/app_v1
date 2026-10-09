@@ -26,5 +26,3 @@ will require a separately approved, minimal migration in phase 11.
 - Confirm whether only Super Admin can restore a soft-deleted account during the
   30-day retention period.
 - Recover the previous CI/CD workflow or explicitly approve rebuilding it.
-- Select the GHCR image names and access policy for a separately authorized
-  Azure deployment; publication CI only runs checks and does not push images.

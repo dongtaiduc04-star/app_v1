@@ -12,6 +12,21 @@ Companion publications:
 - [helm_v1](https://github.com/dongtaiduc04-star/helm_v1): Azure/k3s application Helm chart.
 - [infra_v1](https://github.com/dongtaiduc04-star/infra_v1): Azure infrastructure source and shared-environment operating instructions.
 
+## Current owner's Azure operation
+
+The owner completed activation on 2026-10-08: all three delivery jobs passed,
+the existing Argo Application deployed the four new images from `helm_v1`,
+and the owner confirmed the existing website works. The recorded release and
+GUI-first daily instructions are in [Vận hành Azure v1](docs/azure-operations.vi.md).
+This records that rollout; it is not a promise that the VMs stay running.
+
+The restored workflow follows the old Azure jobs, cache/build steps, Docker
+login and `yq` Helm update. Before publishing this restoration, add the
+repository variable **`HELM_REPO_NAME=helm_v1`**; retain the four existing
+settings below. Then future `app_v1/main` pushes deploy automatically, without
+an extra activation commit or new secrets. PRs only check the code; there is no
+manual `workflow_dispatch` deployment, matching the old Azure workflow.
+
 ## Application
 
 | Module | Responsibility |
@@ -47,20 +62,36 @@ production deployment. Keep secure refresh cookies enabled outside local HTTP.
 
 - Maven build, tests and JaCoCo coverage reports.
 - Frontend lint, 13 current unit tests with coverage thresholds, and build.
-- Production dependency audit and offline delivery-helper tests.
+- The original non-blocking Checkstyle step and Maven/npm/Sonar caches.
 
-Checks use GitHub-hosted Ubuntu 24.04 runners and read-only repository
+Checks use GitHub-hosted `ubuntu-latest` runners and read-only repository
 permissions. With `ENABLE_AZURE_DELIVERY` unset or not exactly `true`, there is
-no Sonar upload, image publication or Helm write. Pull requests and manual
-`workflow_dispatch` runs are always checks-only. Checkout does not retain its
-authentication credential. Backend integration tests use temporary
-Testcontainers databases, not the deployed database.
+no Sonar upload, image publication or Helm write. PRs never receive delivery
+secrets. Checkout does not retain its authentication credential. Backend
+integration tests use temporary Testcontainers databases, not the deployed
+database. Only the fixed owner repository can deliver to the shared environment.
+
+Set these in **app_v1 → Settings → Secrets and variables → Actions**:
+
+| Type | Name | Value/purpose |
+| --- | --- | --- |
+| Secret | `AZURE_SONAR_TOKEN` | Existing Azure Sonar project analysis token |
+| Secret | `GITOPS_PAT` | Separate token with Contents read/write on `helm_v1` only |
+| Variable | `AZURE_SONAR_HOST_URL` | `https://sonar-azure.dongtaiduc.me` |
+| Variable | `HELM_REPO_NAME` | `helm_v1`, never the old `helm` repository |
+| Variable | `ENABLE_AZURE_DELIVERY` | `true` for the already activated owner setup |
 
 The owner-authorized delivery path reuses the existing Azure/k3s environment,
 domain, MySQL data, avatars and SonarQube project `getlink-dtd`; it does not
 create a second environment. Read [Shared Azure delivery](docs/shared-azure-delivery.md)
 before enabling it. Publishing to `helm_v1` is not itself an Argo repository
 switch. The original app/Helm/infra repositories remain unchanged.
+
+Infrastructure management is still manual, as in the old project. The
+`infra_v1` checks-only workflow is not an omitted application deployment stage:
+application releases already deploy through Argo. Select one Terraform writer
+and explicitly verify the handover to the same private backend/state before
+making infrastructure changes; do not run apply merely to release the app.
 
 Run the same checks locally:
 
@@ -71,16 +102,13 @@ npm ci
 npm run lint
 npm test
 npm run build
-npm audit --omit=dev
-cd ..
-node --test scripts/tests/azure-delivery.test.mjs
 ```
 
 A successful build is not a complete security audit. At the reviewed source
-snapshot, production npm audit reported zero findings; the full npm audit still
-had five high development-tool findings in the braces chain and an unsupported
-ESLint 9 release. These are known open risks, not suppressed or fixed by copying
-the repository. Recheck advisories before reusing this code.
+snapshot, the full npm audit had five high development-tool findings in the
+braces chain and an unsupported ESLint 9 release. These known risks were not
+fixed by copying the repository. The restored old workflow does not add a new
+audit/helper test stage; recheck advisories separately before reusing this code.
 
 ## Publication and maintenance policy
 

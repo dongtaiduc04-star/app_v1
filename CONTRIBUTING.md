@@ -15,10 +15,11 @@ Never include credentials, Terraform state, kubeconfigs or private logs in
 public contributions. Follow SECURITY.md for sensitive reports.
 
 Owner changes should use a branch and pull request, run the documented checks,
-and be reviewed before merge. The existing prepared Azure delivery is disabled
-by default and needs the explicit owner setup described in
-[Shared Azure delivery](docs/shared-azure-delivery.md). Pull-request and manual
-checks must remain read-only and must not receive delivery secrets. Any added
+and be reviewed before merge. Azure delivery requires the explicit owner setup
+described in [Shared Azure delivery](docs/shared-azure-delivery.md); the owner
+has already activated the current shared environment. Pull-request checks
+must remain read-only and must not receive delivery secrets. The restored old
+Azure workflow has push/PR triggers, not a manual deployment trigger. Any added
 auto-merge, broader automatic deployment, image package, cloud login or
 cross-repository write permission requires a new owner/security review; it
 must not be inferred from authorization to run checks.

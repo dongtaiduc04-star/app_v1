@@ -8,14 +8,15 @@ Security tab to report privately. Otherwise ask the maintainer, without
 including sensitive details, for a private reporting channel. Do not assume
 that an ordinary issue or pull request is confidential.
 
-By default, and always for pull requests/manual runs, CI only verifies code
+With delivery unset/off, and always for pull requests, CI only verifies code
 with read-only repository permissions and no delivery secrets. Tests use
 temporary databases, not the deployed database. Owner-enabled `app_v1/main`
 pushes additionally contact the existing SonarQube project, publish the shared
 GetLink GHCR packages and commit image selections only to `helm_v1`. When
 that source is selected by the existing Argo Application, those changes can
 deploy into the existing production environment. See
-[Shared Azure delivery](docs/shared-azure-delivery.md) before activation.
+[Shared Azure delivery](docs/shared-azure-delivery.md) for the current owner
+setup. The restored original Azure workflow has no manual deployment trigger.
 No Azure/cloud login or database password is needed by the app workflow.
 Examples that name a Secret contain references only; real values must be
 supplied outside Git. An operator must change any factory/demo credential

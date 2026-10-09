@@ -1,128 +1,118 @@
-# Shared Azure delivery from app_v1
+# Azure delivery from app_v1
 
-This is a public operating source for the **existing** GetLink deployment,
-not a new Azure environment. The old private repositories are not edited or
-disabled by this preparation. Do not run Terraform apply, recreate the VM,
-install a second Helm release, or create a second Argo Application as a way
-to activate this workflow. Those actions can change or duplicate production
-resources and are outside this release path.
+This public copy follows the **old Azure workflow**, not a new architecture:
+build/test/Checkstyle → Sonar quality gate → four GHCR images → Azure Helm
+values → the existing Argo Application. The application/business source and
+Dockerfiles are unchanged; only v1 repository targets/access and minimal public
+safety differ. The old private repositories remain unchanged. No AWS workflow,
+fresh Azure environment, second Helm release or second Argo Application is used.
 
-## What a main push does
+## Recorded activation and current setup
 
-By default, every push/PR/manual run only checks the code. When the owner sets
-the repository variable `ENABLE_AZURE_DELIVERY` to exactly `true`, a push to
-`dongtaiduc04-star/app_v1` on `main` runs:
+On 2026-10-08 the owner confirmed successful delivery of app commit
+`d6a86653ec927e5049de476ee67d0d66e2a9c437`, Helm commit
+`6f05266eb2e3034f28c8d5492c5c20a1fa1307dc`, Argo Synced/Healthy and all four
+application Pods Ready. The owner confirmed the existing website works.
+These are historical observations, not a live availability check or validation
+of subsequent source changes. See [the GUI-first Vietnamese runbook](azure-operations.vi.md).
 
-1. Backend build/tests/coverage; frontend install/lint/tests/build/production
-   audit; delivery-helper tests.
-   The old Checkstyle command is retained as explicitly **non-blocking**;
-   it is not an enforced quality gate.
-2. Analysis and a blocking quality gate on the existing SonarQube project
-   `getlink-dtd`, using the existing SonarQube server.
-3. Docker builds for the four existing packages below. Build all four before
-   pushing any. Push full source-SHA tags, then replace their shared `latest`
-   tags. Only this job grants its GitHub token `packages: write`.
-4. A normal Git commit/push to **only** `dongtaiduc04-star/helm_v1/main`, changing
-   only the four image selections in `helm/getlink-dtd/values-azure.yaml`.
+Before publishing the restored original workflow, add `HELM_REPO_NAME=helm_v1`
+in **app_v1 → Settings → Secrets and variables → Actions → Variables**. Keep
+the existing two secrets and other two variables:
 
-| Component | Existing package |
-| --- | --- |
-| frontend | `ghcr.io/dongtaiduc04-star/getlink-dtd-frontend` |
-| API gateway | `ghcr.io/dongtaiduc04-star/getlink-dtd-api-gateway` |
-| auth service | `ghcr.io/dongtaiduc04-star/getlink-dtd-auth-service` |
-| link service | `ghcr.io/dongtaiduc04-star/getlink-dtd-link-service` |
+| Type | Name | Required value/purpose |
+| --- | --- | --- |
+| Secret | `AZURE_SONAR_TOKEN` | Analysis token for the existing Azure Sonar project `getlink-dtd` |
+| Secret | `GITOPS_PAT` | Separate fine-grained token: only `helm_v1`, Contents read/write and default Metadata read |
+| Variable | `AZURE_SONAR_HOST_URL` | `https://sonar-azure.dongtaiduc.me` (optional trailing slash) |
+| Variable | `HELM_REPO_NAME` | Exactly `helm_v1`; any other target stops before publication |
+| Variable | `ENABLE_AZURE_DELIVERY` | Exactly `true` for owner-authorized main delivery |
 
-The updater is intentionally restricted to the reviewed scalar image mapping;
-unexpected packages, placeholders, aliases, duplicate fields, mixed existing
-SHA selections or non-SHA tags
-stop the writer. It preserves domains, database/PVC settings and Secret names.
-It downloads no YAML-editing executable. Checkout never persists Git credentials;
-the Helm token is provided only to the checkout and normal push steps. A
-concurrent owner's Helm edit causes a non-fast-forward rejection, not an
-automatic rebase, reset or force-push.
+The four existing GHCR packages retain their existing visibility and old
+repository access. `app_v1` already has Actions access with Write on each.
+Publishing uses its built-in short-lived `GITHUB_TOKEN`; no registry PAT or
+Azure/AWS/cluster/database/Cloudflare credential is needed in this app repo.
+Never paste secret values into Git, workflow logs, screenshots or chat.
 
-## Owner setup before activation
+## The original three jobs
 
-Keep delivery **off** while reviewing and publishing the prepared source.
-These are owner actions in GitHub, not actions performed by this repository:
+1. **Build, Test, Checkstyle & SonarQube (PRs)** (`build-and-quality`): the
+   original Java 17/Maven cache, Node 22/npm cache and Sonar cache; Maven clean
+   verify, legacy non-blocking Checkstyle, frontend install/lint/tests/build.
+   An activated owner `main` push also scans the existing Sonar server/project
+   and waits for its blocking quality gate. PRs run the same original code
+   checks without Sonar secrets or publication.
+2. **Build Docker images and push to GHCR (push to main)** (`docker-build-push`):
+   the original Docker login action, four builds and SHA + `latest` pushes to
+   `ghcr.io/dongtaiduc04-star/getlink-dtd-{frontend,api-gateway,auth-service,link-service}`.
+   Only this job has `packages: write`.
+3. **Update GetLink Helm values** (`update-helm`): checkout `helm_v1/main`, use
+   the original `mikefarah/yq` v4.34.1 expression to update the four image
+   repositories/tags in `helm/getlink-dtd/values-azure.yaml`, then commit and
+   normally push. The one existing Argo Application `getlink-dtd`, already
+   selecting `helm_v1` with auto-sync/prune/self-heal, deploys that desired state.
 
-| app_v1 setting | Purpose |
-| --- | --- |
-| Variable `AZURE_SONAR_HOST_URL` | Exactly `https://sonar-azure.dongtaiduc.me` (an optional trailing `/` is accepted), not a new server or placeholder. |
-| Secret `AZURE_SONAR_TOKEN` | An analysis token authorized for the existing `getlink-dtd` project. Never paste its value into Git, logs or chat. |
-| Secret `GITOPS_PAT` | A **separate** fine-grained personal access token whose repository selection is only `dongtaiduc04-star/helm_v1`, with Contents read/write and default Metadata read. Do not reuse or alter the old private Helm token. |
-| Variable `ENABLE_AZURE_DELIVERY` | Leave unset/off until all shared-environment checks are complete; `true` opts main pushes into the writes above. |
+Triggers are the original `push main` and `pull_request main`; there is no
+`workflow_dispatch` release. No new audit/helper-test stage, custom YAML
+updater, VM automation or Terraform apply stage has been added. Unset/off
+`ENABLE_AZURE_DELIVERY` leaves code checks only; forks cannot deliver into the
+owner's shared environment.
 
-For each existing GHCR package, verify its package settings grant the
-`app_v1` repository **Actions access with write permission**, while retaining
-the old `app` repository's access. Its `GITHUB_TOKEN` is repository-scoped;
-`packages: write` alone must not be assumed to grant access to an existing
-package belonging to a different repository. Keep the existing package
-visibility and existing `ghcr-pull-secret` unless a separate reviewed change
-is needed. Adding the new source label does not replace an access review.
+## Minimal public safety differences
 
-Allow the five pinned actions in the workflow if an Actions allowlist is used.
-No Azure login/subscription token, AWS credential, cluster admin credential,
-database password, Cloudflare credential or old Helm write token is required
-by this app workflow. Keep public pull-request workflows without secrets;
-there is no `pull_request_target` delivery path.
+- Actions are pinned to full official commit SHAs at the same original versions.
+- Writes require the exact `dongtaiduc04-star/app_v1` repository, a `main` push,
+  the owner opt-in flag and successful preceding jobs. Sonar HTTPS URL and
+  `HELM_REPO_NAME=helm_v1` are checked before image publication.
+- The official yq binary's reviewed SHA-256 is checked **before execution**.
+- Checkout does not persist credentials. Only the Helm writer uses its narrow
+  token; the push authorization header is masked and exists only for that
+  command. Only the Azure values file can be staged/committed.
+- Main releases are not canceled mid-publication. A concurrent Helm update
+  rejects the normal push instead of force-pushing or automatically rebasing.
 
-Before the first enabled push, verify `helm_v1` has the reviewed existing
-domain, resource/PVC/Secret names, package repositories and full SHA tags,
-and compare rendered manifests with the selected live release. A missing
-writer credential or package access can fail after some packages have been
-published: publishing four packages is not an atomic transaction. Inspect
-the failed run and existing Helm state before retrying.
+The updater intentionally uses the original `yq` behavior rather than a new
+custom schema/parser. It may normalize YAML formatting in that one file.
+Publishing four packages is not atomic; inspect a failed run and Helm commit
+before retrying, without broadening token permissions or bypassing the gate.
 
-## One application; manual source selection
+## Shared resources and infrastructure boundary
 
-The **same existing** Argo Application selects either `helm` or `helm_v1`,
-not both. Retain its Application/release name, destination namespace, chart
-path, values files and existing PVC/Secret references when switching source.
-The owner separately reviews the diff and changes its source. Automatic sync
-applies only the selected repository's desired state; it must not be enabled
-against a placeholder or a materially different chart. Database and avatar
-backups are required before changing a live deployment; source selection is
-not a database backup or data-isolation mechanism.
+The old and v1 pipelines share the four packages and Sonar project; whichever
+finishes last can replace `latest` and the newest Sonar analysis. Avoid parallel
+old/v1 publication. The website deploys the full SHA from the selected Helm
+source, not `latest`. SHA tags are a convention, not registry-enforced
+immutability; rebuilding the same commit may replace a digest.
 
-**A push to the non-selected app repository still has shared effects.** Both
-pipelines use the same four packages and Sonar project. Whichever run finishes
-last can replace `latest` and become the newest Sonar analysis. The workflows'
-concurrency controls are repository-local, not a cross-repository lock. Avoid
-publishing from both app repositories at the same time. The website uses the
-full SHA recorded by the selected Helm repository, not `latest`; a source SHA
-tag is a convention, not registry-enforced immutability, and a rerun may
-overwrite it with a rebuilt image. Track the deployed SHA and image digest
-when reviewing a release or rollback.
+The website, database and avatar volumes are shared. Selecting old manifests or
+images does not restore database contents or guarantee schema compatibility;
+data/schema changes need a separate reviewed backup/rollback plan. Routine
+owner confirmation can use login, old link/avatar data and a public profile in
+the browser; no broad test suite or new data is required just to confirm a
+normal release.
 
-Once Argo selects `helm_v1` with reviewed auto-sync settings, future activated
-`app_v1/main` pushes can change the **existing website and existing database's
-application code** without a second manual Argo sync. A new application version
-can change data or schemas. Returning to the old repository restores its
-selected application manifests/images, not database contents or guaranteed
-schema compatibility. Use backward-compatible changes and a reviewed backup
-and rollback plan.
+Terraform remains manual as in the old Azure project. `infra_v1` CI checks
+source only and is not a missing application CD stage. Before changing
+infrastructure from v1, verify the explicit handover to the **same private
+state**, choose one writer and never run old/v1 Terraform simultaneously. See
+[shared infrastructure control](https://github.com/dongtaiduc04-star/infra_v1/blob/main/azure/SHARED-CONTROL.md).
+Creating these source files does not itself change any GitHub setting or live
+Azure/Argo resource.
 
-## Verification and boundaries
+## Official pin and checksum evidence
 
-After the first activated delivery, check all workflow jobs, the `helm_v1`
-image SHA commit, the selected Argo source/status and running image digests.
-Then test registration/login, profile/link editing, public pages, redirects,
-QR/analytics and avatar persistence against the existing site. CI success
-alone does not prove the live site works or that its data is safe.
-
-These files only prepare the workflow. No activation variable, secret, package
-permission, Argo selection, live sync, Git push or Azure resource operation is
-performed by creating or testing them locally.
-
-## Pinned official actions
-
-Pins were checked against official release and commit pages (2026-10-08):
+Pins were checked on 2026-10-08 against official release/commit pages:
 
 - [checkout v6.0.2](https://github.com/actions/checkout/releases/tag/v6.0.2): `de0fac2e4500dabe0009e67214ff5f5447ce83dd`.
 - [setup-java v5.2.0](https://github.com/actions/setup-java/releases/tag/v5.2.0): `be666c2fcd27ec809703dec50e508c2fdc7f6654`.
 - [setup-node v7.0.0](https://github.com/actions/setup-node/releases/tag/v7.0.0): `820762786026740c76f36085b0efc47a31fe5020`.
-- [Sonar scan v8.3.0](https://github.com/SonarSource/sonarqube-scan-action/releases/tag/v8.3.0): `d209202bc7d53ff1cc128f7f907dac145c9d6ae9` (scanner 8.1.0.6389, signature verification enabled).
+- [cache v4](https://github.com/actions/cache/releases/tag/v4): `0057852bfaa89a56745cba8c7296529d2fc39830` (v4.3.0).
+- [docker/login-action v3](https://github.com/docker/login-action/releases/tag/v3): `c94ce9fb468520275223c153574b00df6fe4bcc9`.
+- [Sonar scan v8.3.0](https://github.com/SonarSource/sonarqube-scan-action/releases/tag/v8.3.0): `d209202bc7d53ff1cc128f7f907dac145c9d6ae9`.
 - [Sonar quality gate v1.2.0](https://github.com/SonarSource/sonarqube-quality-gate-action/releases/tag/v1.2.0): `cf038b0e0cdecfa9e56c198bbb7d21d751d62c3b`.
 
-For token/permission behavior, see [GitHub's token guide](https://docs.github.com/en/actions/tutorials/authenticate-with-github_token).
+[yq v4.34.1](https://github.com/mikefarah/yq/releases/tag/v4.34.1) Linux amd64
+SHA-256: `c5a92a572b3bd0024c7b1fe8072be3251156874c05f017c23f9db7b3254ae71a`.
+Read from the official [checksums](https://github.com/mikefarah/yq/releases/download/v4.34.1/checksums)
+and [algorithm order](https://github.com/mikefarah/yq/releases/download/v4.34.1/checksums_hashes_order)
+assets; no unverified executable was run during source preparation.
