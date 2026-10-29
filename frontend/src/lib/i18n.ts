@@ -3,8 +3,8 @@ export const dictionaries = {
     nav: { home: "Trang chủ", login: "Đăng nhập", register: "Bắt đầu", dashboard: "Dashboard" },
     landing: {
       badge: "Một liên kết. Mọi điều bạn làm.",
-      titleA: "Nơi mọi liên kết",
-      titleB: "tìm thấy bạn.",
+      titleA: "DEMO",
+      titleB: "WORKFLOW",
       description: "Tạo trang cá nhân gọn đẹp, chia sẻ mọi kênh quan trọng và quản lý tất cả tại một nơi.",
       primary: "Tạo trang miễn phí",
     },
